@@ -1,9 +1,9 @@
-importScripts('./vendor/sql-asm.js');
+importScripts('./vendor/sql-wasm.js');
 self.onmessage = async ({data}) => {
  let db;
  try {
-  const SQL=await initSqlJs(); db=new SQL.Database(new Uint8Array(data));
-  const query=sql=>{const x=db.exec(sql)[0];return x?x.values.map(v=>Object.fromEntries(x.columns.map((k,i)=>[k,v[i]]))):[];};
+  const SQL=await initSqlJs({locateFile:file=>new URL('./vendor/'+file,self.location.href).href}); db=new SQL.Database(new Uint8Array(data));
+  const query=sql=>{const statement=db.prepare(sql), rows=[];try{while(statement.step())rows.push(statement.getAsObject());return rows;}finally{statement.free();}};
   const tags=query('SELECT * FROM TABLE_CARDTAGS');
   const names=new Map(tags.map(c=>[c._id,(c.nickname||c.card_name||'카드')+(c.card_no?' · '+String(c.card_no).slice(-4):'')]));
   const records=query('SELECT * FROM TABLE_RECEIPT WHERE type IN (1,2) AND hide=0 ORDER BY ymd DESC,time DESC,_id DESC').map(r=>({id:r._id,cardId:r.ref_id,card:names.get(r.ref_id)||r.nick||r.cname||'카드',date:String(r.ymd||''),time:String(r.time||''),amount:r.status==='취소'?-Math.abs(Number(r.paid)):Number(r.paid),store:r.storenew||r.store||'',status:r.status||'',installments:Number(r.div_month)||0}));
