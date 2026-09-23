@@ -30,3 +30,8 @@ test('only exact company and whole stored number merge; blank numbers remain sep
  for(const [id,company,number] of cards){tag.run([id,'',company,number]);row.run([id,id,'','','2026-09-01','12:00',100,'','store','승인',0,1,0]);}
  tag.free();row.free();const result=await parse(db.export());db.close();assert.equal(result.cards.length,5);assert.equal(result.records.length,6);assert.equal(result.records.reduce((s,r)=>s+r.amount,0),600);assert.equal(result.cards.find(c=>c.id===1).sourceIds.length,2);
 });
+test('month net ranking includes cancellations and shared nicknames',()=>{
+ const source=fs.readFileSync(require.resolve('../public/app.js'),'utf8');const part=source.slice(source.indexOf('function nickname'),source.indexOf('function updateCardOptions'));
+ const month={value:'2026-09'};const state={nicknames:{'9':'생활비'},data:{cards:[{id:1,name:'A',sourceIds:['1','9']},{id:2,name:'B'},{id:3,name:'C'}],records:[{cardId:1,date:'2026-09-01',amount:100},{cardId:1,date:'2026-09-02',amount:-90},{cardId:2,date:'2026-09-01',amount:50},{cardId:3,date:'2026-08-01',amount:999}]}};
+ const ctx={state,$:()=>month};vm.createContext(ctx);vm.runInContext(part,ctx);const ranked=ctx.monthlyCards();assert.equal(ranked[0].card.id,2);assert.equal(ranked[1].amount,10);assert.equal(ranked[2].count,0);assert.equal(ctx.cardLabel(state.data.cards[0]),'생활비');month.value='2026-08';assert.equal(ctx.monthlyCards()[0].card.id,3);
+});
