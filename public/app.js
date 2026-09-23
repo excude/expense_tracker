@@ -4,10 +4,10 @@ const state={data:{records:[],cards:[]},page:0,busy:false,initialized:false,sett
 const won=v=>Number(v).toLocaleString('ko-KR')+'원';
 let auth, db, stop, accessStop, settingsStop, generation=0;
 function notify(message,error=false){$('notice').textContent=message;$('notice').hidden=!message;$('notice').className=error?'error':'success';}
-function options(el,items,all){const selected=el.value;el.replaceChildren(new Option(all,''),...items.map(x=>new Option(x.label,x.value)));el.value=items.some(x=>String(x.value)===selected)?selected:'';}
+function options(el,items,all){const signature=JSON.stringify([all,items]);if(el.dataset.optionsSignature===signature)return;el.dataset.optionsSignature=signature;const selected=el.value;el.replaceChildren(new Option(all,''),...items.map(x=>new Option(x.label,x.value)));el.value=items.some(x=>String(x.value)===selected)?selected:'';}
 function show(data){state.data=data;const selected=$('month').value;const months=[...new Set(data.records.map(r=>r.date.slice(0,7)))].sort().reverse();$('month').replaceChildren(...months.map(m=>new Option(m,m)));$('month').value=months.includes(selected)?selected:(data.latestMonth||months[0]||'');state.initialized=true;render();}
 async function run(fn){if(state.busy)return;state.busy=true;notify('');try{await fn();}catch(e){notify(e.code?.startsWith('auth/')?'로그인 정보를 확인해 주세요.':e.message,true);}finally{state.busy=false;render();}}
-function parse(bytes){return new Promise((resolve,reject)=>{const worker=new Worker('./parse-worker.js?v=0.04');const timer=setTimeout(()=>{worker.terminate();reject(Error('백업 분석 시간이 초과되었습니다.'));},60000);worker.onmessage=({data})=>{clearTimeout(timer);worker.terminate();data.error?reject(Error(data.error)):resolve(data);};worker.onerror=()=>{clearTimeout(timer);worker.terminate();reject(Error('백업 분석에 실패했습니다.'));};worker.postMessage(bytes,[bytes]);});}
+function parse(bytes){return new Promise((resolve,reject)=>{const worker=new Worker('./parse-worker.js?v=0.05');const timer=setTimeout(()=>{worker.terminate();reject(Error('백업 분석 시간이 초과되었습니다.'));},60000);worker.onmessage=({data})=>{clearTimeout(timer);worker.terminate();data.error?reject(Error(data.error)):resolve(data);};worker.onerror=()=>{clearTimeout(timer);worker.terminate();reject(Error('백업 분석에 실패했습니다.'));};worker.postMessage(bytes,[bytes]);});}
 async function loadSnapshot(meta,epoch){
  if(!meta){show({records:[],cards:[]});return;}
  const ref=db.doc('users/'+cfg.ledgerId+'/snapshots/'+meta.snapshotId);

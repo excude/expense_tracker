@@ -35,3 +35,9 @@ test('month net ranking includes cancellations and shared nicknames',()=>{
  const month={value:'2026-09'};const state={nicknames:{'9':'생활비'},data:{cards:[{id:1,name:'A',sourceIds:['1','9']},{id:2,name:'B'},{id:3,name:'C'}],records:[{cardId:1,date:'2026-09-01',amount:100},{cardId:1,date:'2026-09-02',amount:-90},{cardId:2,date:'2026-09-01',amount:50},{cardId:3,date:'2026-08-01',amount:999}]}};
  const ctx={state,$:()=>month};vm.createContext(ctx);vm.runInContext(part,ctx);const ranked=ctx.monthlyCards();assert.equal(ranked[0].card.id,2);assert.equal(ranked[1].amount,10);assert.equal(ranked[2].count,0);assert.equal(ctx.cardLabel(state.data.cards[0]),'생활비');month.value='2026-08';assert.equal(ctx.monthlyCards()[0].card.id,3);
 });
+test('selecting a card keeps option nodes intact; changed list resets missing selection',()=>{
+ const source=fs.readFileSync(require.resolve('../public/app.js'),'utf8');const part=source.slice(source.indexOf('function options('),source.indexOf('function show('));let replacements=0;
+ const el={dataset:{},value:'',replaceChildren(){replacements++;}};
+ const ctx={Option:function(label,value){this.label=label;this.value=value;}};vm.createContext(ctx);vm.runInContext(part,ctx);
+ const items=[{value:'1',label:'A · 100원'},{value:'2',label:'B · 50원'}];ctx.options(el,items,'전체 카드');el.value='2';ctx.options(el,items,'전체 카드');assert.equal(replacements,1);assert.equal(el.value,'2');ctx.options(el,[items[0]],'전체 카드');assert.equal(replacements,2);assert.equal(el.value,'');
+});
