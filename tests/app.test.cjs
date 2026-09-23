@@ -12,3 +12,13 @@ test('Drive sync publishes chunks and pointer atomically; unchanged file skipped
  const ctx={ScriptApp:{getOAuthToken:()=> 'google-token'},PropertiesService:{getScriptProperties:()=>({getProperty:k=>store[k],setProperty:(k,v)=>store[k]=v})},LockService:{getScriptLock:()=>({tryLock:()=>true,releaseLock(){}})},DriveApp:{getFolderById:()=>{let first=true;return {getFiles:()=>({hasNext:()=>first,next:()=>{first=false;return file;}})}}},Utilities:{base64Encode:b=>Buffer.from(b).toString('base64'),getUuid:()=> 'snapshot'},UrlFetchApp:{fetch:(url,opts)=>{let data;if(url.includes('securetoken'))data={user_id:'owner',refresh_token:'r',id_token:'t'};else if(url.endsWith(':runQuery'))data=[];else if(url.endsWith(':commit')){commits++;writes=JSON.parse(opts.payload).writes;data={};}else throw Error('Unexpected URL');return {getResponseCode:()=>200,getContentText:()=>JSON.stringify(data)};}}};
  vm.createContext(ctx);vm.runInContext(fs.readFileSync(require.resolve('../bridge/Code.gs'),'utf8'),ctx);ctx.syncDrive();assert.equal(commits,1);assert.equal(writes.length,3);assert.ok(writes.at(-1).update.name.endsWith('/meta/current'));ctx.syncDrive();assert.equal(commits,1);
 });
+test('shared exclusions block totals until settings load and category overrides group cards',()=>{
+ const source=fs.readFileSync(require.resolve('../public/app.js'),'utf8');
+ const part=source.slice(source.indexOf('function cardCategory'),source.indexOf('function updateCardOptions'));
+ const state={settingsReady:false,excluded:['2'],categories:{'1':'생활비'},data:{records:[{cardId:1,amount:100},{cardId:2,amount:200}]}};
+ const ctx={state};vm.createContext(ctx);vm.runInContext(part,ctx);
+ assert.equal(ctx.includedRecords().length,0);state.settingsReady=true;
+ assert.equal(ctx.includedRecords().reduce((n,r)=>n+r.amount,0),100);
+ assert.equal(ctx.cardCategory({id:1,category:'은행'}),'생활비');assert.equal(ctx.cardCategory({id:2,category:'은행'}),'은행');
+ state.excluded=[];assert.equal(ctx.includedRecords().length,2);
+});
