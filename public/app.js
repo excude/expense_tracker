@@ -1,0 +1,66 @@
+"use strict";
+const $=id=>document.getElementById(id), cfg=window.APP_CONFIG;
+const state={data:{records:[],cards:[]},page:0,busy:false,initialized:false};
+const won=v=>Number(v).toLocaleString('ko-KR')+'원';
+let auth, db, stop, accessStop, generation=0;
+function notify(message,error=false){$('notice').textContent=message;$('notice').hidden=!message;$('notice').className=error?'error':'success';}
+function options(el,items,all){const selected=el.value;el.replaceChildren(new Option(all,''),...items.map(x=>new Option(x.label,x.value)));el.value=items.some(x=>String(x.value)===selected)?selected:'';}
+function show(data){state.data=data;options($('month'),[...new Set(data.records.map(r=>r.date.slice(0,7)))].sort().reverse().map(m=>({value:m,label:m})),'전체 기간');options($('card'),data.cards.map(c=>({value:String(c.id),label:c.name})),'전체 카드');if(!state.initialized){$('month').value=data.latestMonth||'';state.initialized=true;}render();}
+async function run(fn){if(state.busy)return;state.busy=true;notify('');try{await fn();}catch(e){notify(e.code?.startsWith('auth/')?'로그인 정보를 확인해 주세요.':e.message,true);}finally{state.busy=false;render();}}
+function parse(bytes){return new Promise((resolve,reject)=>{const worker=new Worker('./parse-worker.js');const timer=setTimeout(()=>{worker.terminate();reject(Error('백업 분석 시간이 초과되었습니다.'));},60000);worker.onmessage=({data})=>{clearTimeout(timer);worker.terminate();data.error?reject(Error(data.error)):resolve(data);};worker.onerror=()=>{clearTimeout(timer);worker.terminate();reject(Error('백업 분석에 실패했습니다.'));};worker.postMessage(bytes,[bytes]);});}
+async function loadSnapshot(meta,epoch){
+ if(!meta){show({records:[],cards:[]});return;}
+ const ref=db.doc('users/'+cfg.ledgerId+'/snapshots/'+meta.snapshotId);
+ const snap=await ref.collection('chunks').orderBy('index').get();
+ if(snap.size!==meta.chunkCount)throw Error('백업이 완전하지 않습니다. 다시 동기화해 주세요.');
+ const encoded=snap.docs.map(d=>d.data().payload).join('');
+ const raw=atob(encoded), bytes=Uint8Array.from(raw,c=>c.charCodeAt(0));
+ const data=await parse(bytes.buffer);
+ if(epoch!==generation||!auth.currentUser)return;
+ show(data);$('last-update').textContent='마지막 반영 '+new Date(meta.updatedAt).toLocaleString('ko-KR');
+ $('drive-status').textContent=meta.source==='drive'?'드라이브 자동 반영':'직접 업로드';
+}
+async function upload(file){
+ if(file.size>6*1024*1024)throw Error('무료 구성에서는 6MiB 이하의 백업을 지원합니다.');
+ const bytes=await file.arrayBuffer();await parse(bytes.slice(0));
+ let raw='';const arr=new Uint8Array(bytes);for(let i=0;i<arr.length;i+=8192)raw+=String.fromCharCode(...arr.subarray(i,i+8192));
+ const encoded=btoa(raw), snapshotId=crypto.randomUUID(), chunkCount=Math.ceil(encoded.length/350000), updatedAt=new Date().toISOString();
+ const base=db.doc('users/'+cfg.ledgerId+'/snapshots/'+snapshotId), batch=db.batch();
+ for(let i=0;i<chunkCount;i++)batch.set(base.collection('chunks').doc(String(i).padStart(3,'0')),{index:i,payload:encoded.slice(i*350000,(i+1)*350000)});
+ batch.set(base,{chunkCount,updatedAt});batch.set(db.doc('users/'+cfg.ledgerId+'/meta/current'),{snapshotId,chunkCount,updatedAt,source:'manual'});
+ await batch.commit();notify('백업을 저장했습니다. 내역을 불러옵니다.');try{await cleanup();}catch{notify('백업은 저장됐지만 이전 사본 정리에 실패했습니다. 접근 규칙과 할당량을 확인해 주세요.',true);}
+}
+async function cleanup(){
+ const cutoff=new Date(Date.now()-86400000).toISOString();
+ const old=await db.collection('users/'+cfg.ledgerId+'/snapshots').where('updatedAt','<',cutoff).limit(30).get();
+ const current=(await db.doc('users/'+cfg.ledgerId+'/meta/current').get()).data();
+ for(const doc of old.docs){if(doc.id===current?.snapshotId)continue;const chunks=await doc.ref.collection('chunks').get();const batch=db.batch();chunks.docs.forEach(d=>batch.delete(d.ref));batch.delete(doc.ref);await batch.commit();}
+}
+function text(tag,value,cls){const el=document.createElement(tag);el.textContent=value;if(cls)el.className=cls;return el;}
+function render(){const records=state.data.records.filter(r=>(!$('month').value||r.date.startsWith($('month').value))&&(!$('card').value||String(r.cardId)===$('card').value)&&(!$('search').value||(r.store+' '+r.card).toLowerCase().includes($('search').value.toLowerCase())));const cancelled=records.filter(r=>r.status==='취소');const approved=records.filter(r=>r.status!=='취소');$('total').textContent=won(records.reduce((s,r)=>s+r.amount,0));$('approved').textContent=won(approved.reduce((s,r)=>s+r.amount,0));$('cancelled').textContent=won(cancelled.reduce((s,r)=>s+r.amount,0));$('approved-count').textContent=approved.length.toLocaleString()+'건';$('cancelled-count').textContent=cancelled.length.toLocaleString()+'건';$('count').textContent=records.length.toLocaleString()+'건';const max=Math.max(1,Math.ceil(records.length/50));state.page=Math.min(state.page,max-1);$('page').textContent=(state.page+1)+' / '+max;$('prev').disabled=state.busy||!state.page;$('next').disabled=state.busy||state.page+1>=max;const rows=$('rows');rows.replaceChildren();for(const r of records.slice(state.page*50,state.page*50+50)){const row=text('article','','transaction');const left=text('div','','transaction-info');left.append(text('b',r.store||'가맹점 정보 없음'),text('span',r.card+' · '+r.date+' '+r.time.slice(0,5)));const right=text('div','','amount');right.append(text('b',won(r.amount),r.status==='취소'?'cancel':''),text('span',r.status+(r.installments?' · '+r.installments+'개월 할부':'')));row.append(left,right);rows.append(row)}if(!records.length){const empty=text('div','','empty');empty.append(text('h3',state.data.records.length?'해당하는 거래가 없어요':'백업 파일을 올려 주세요'),text('p',state.data.records.length?'조회 조건을 바꿔 보세요.':'체리피커에서 내보낸 .db 파일을 선택하세요.'));rows.append(empty)}}
+
+$('google-login').onclick=()=>run(async()=>{const provider=new firebase.auth.GoogleAuthProvider();provider.setCustomParameters({prompt:'select_account'});await auth.signInWithPopup(provider);});
+$('logout').onclick=()=>run(()=>auth.signOut());
+$('backup-file').onchange=e=>{const f=e.target.files[0];if(f)run(()=>upload(f));e.target.value='';};
+for(const id of ['month','card','search'])$(id).addEventListener(id==='search'?'input':'change',()=>{state.page=0;render();});
+$('prev').onclick=()=>{state.page--;render();};$('next').onclick=()=>{state.page++;render();};
+(async()=>{try{
+ if(cfg.firebase.projectId.startsWith('REPLACE_'))throw Error('설정이 필요합니다. README의 Firebase 설정을 먼저 완료해 주세요.');
+ firebase.initializeApp(cfg.firebase);auth=firebase.auth();db=firebase.firestore();await auth.setPersistence(firebase.auth.Auth.Persistence.SESSION);
+ function clearView(){stop?.();stop=null;++generation;state.initialized=false;state.data={records:[],cards:[]};render();$('dashboard').hidden=true;$('login').hidden=false;}
+ auth.onAuthStateChanged(user=>{
+  accessStop?.();accessStop=null;clearView();$('logout').hidden=!user;
+  if(!user)return;
+  const identity=user.uid;
+  accessStop=db.doc('access/'+user.email.toLowerCase()).onSnapshot(member=>{
+   if(auth.currentUser?.uid!==identity)return;
+   clearView();
+   const permission=member.data();
+   if(!permission?.enabled){notify('접근이 허용되지 않은 계정입니다. 관리자에게 등록을 요청해 주세요.',true);return;}
+   notify('');$('dashboard').hidden=false;$('login').hidden=true;
+   $('backup-file').closest('label').hidden=permission.role!=='editor';
+   stop=db.doc('users/'+cfg.ledgerId+'/meta/current').onSnapshot(s=>{const ticket=++generation;loadSnapshot(s.data(),ticket).catch(e=>{if(ticket===generation)notify(e.message,true);});},()=>{clearView();notify('접근 권한이 없거나 연결이 해제되었습니다.',true);});
+  },()=>{clearView();notify('접근이 허용되지 않았습니다. 관리자에게 확인해 주세요.',true);});
+ });
+
+}catch(e){notify(e.message,true);}finally{$('loading').hidden=true;}})();

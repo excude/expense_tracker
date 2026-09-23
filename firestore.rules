@@ -1,0 +1,19 @@
+rules_version = '2';
+service cloud.firestore {
+ match /databases/{database}/documents {
+  function googleUser() {
+   return request.auth != null && request.auth.token.email_verified == true
+    && request.auth.token.firebase.sign_in_provider == 'google.com';
+  }
+  function memberPath() { return /databases/$(database)/documents/access/$(request.auth.token.email.lower()); }
+  function allowed() { return googleUser() && exists(memberPath()) && get(memberPath()).data.enabled == true; }
+  match /access/{email} {
+   allow get: if googleUser() && request.auth.token.email.lower() == email;
+   allow list, write: if false;
+  }
+  match /users/shared/{document=**} {
+   allow read: if allowed();
+   allow write: if allowed() && get(memberPath()).data.role == 'editor';
+  }
+ }
+}
