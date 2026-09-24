@@ -51,3 +51,9 @@ test('monthly chart totals include refunds and zero months across year boundary'
  const rows=ctx.monthlyTotals([{date:'2025-12-01',amount:100},{date:'2025-12-02',amount:-20},{date:'2026-02-01',amount:-30}]);
  assert.equal(JSON.stringify(rows),JSON.stringify([{month:'2026-02',amount:-30},{month:'2026-01',amount:0},{month:'2025-12',amount:80}]));assert.equal(ctx.monthlyTotals([]).length,0);
 });
+test('setup resolves named folder and replaces old sync trigger with daily Seoul trigger',()=>{
+ const store={},calls=[],old={getHandlerFunction:()=> 'syncDrive'};
+ const chain={timeBased(){return this},everyDays(n){calls.push(['days',n]);return this},atHour(n){calls.push(['hour',n]);return this},nearMinute(n){return this},inTimezone(z){calls.push(['zone',z]);return this},create(){calls.push(['created'])}};
+ const ctx={PropertiesService:{getScriptProperties:()=>({getProperty:k=>store[k],setProperty:(k,v)=>store[k]=v})},DriveApp:{getFoldersByName:name=>{assert.equal(name,'체리피커백업폴더(삭제시 백업/복구 불능)');let remaining=true;return {hasNext:()=>remaining,next:()=>{remaining=false;return {getId:()=> 'folder-id'}}}}},ScriptApp:{getProjectTriggers:()=>[old],deleteTrigger:()=>calls.push(['deleted']),newTrigger:()=>chain}};
+ vm.createContext(ctx);vm.runInContext(fs.readFileSync(require.resolve('../bridge/Code.gs'),'utf8'),ctx);ctx.syncDrive=()=>calls.push(['synced']);ctx.setup();assert.equal(store.BACKUP_FOLDER_ID,'folder-id');assert.equal(store.PROJECT_ID,'fluent-sprite-509500-c0');assert.deepEqual(calls,[['synced'],['deleted'],['days',1],['hour',4],['zone','Asia/Seoul'],['created']]);
+});

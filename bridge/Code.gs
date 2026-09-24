@@ -3,9 +3,19 @@ function props_(){return PropertiesService.getScriptProperties();}
 function setting_(key){const v=props_().getProperty(key);if(!v)throw Error('스크립트 속성이 필요합니다: '+key);return v;}
 function request_(url,options){const r=UrlFetchApp.fetch(url,Object.assign({muteHttpExceptions:true},options));if(r.getResponseCode()>=300)throw Error('연결 실패 HTTP '+r.getResponseCode()+'. 프로젝트/로그인/규칙을 확인하세요.');return JSON.parse(r.getContentText()||'{}');}
 function setup(){
+ const properties=props_();
+ if(!properties.getProperty('PROJECT_ID'))properties.setProperty('PROJECT_ID','fluent-sprite-509500-c0');
+ if(!properties.getProperty('BACKUP_FOLDER_ID')){
+  const folders=DriveApp.getFoldersByName('체리피커백업폴더(삭제시 백업/복구 불능)');
+  if(!folders.hasNext())throw Error('백업 폴더를 찾지 못했습니다. 스크립트 속성 BACKUP_FOLDER_ID에 폴더 ID를 입력하세요.');
+  const folder=folders.next();
+  if(folders.hasNext())throw Error('같은 이름의 폴더가 여러 개입니다. BACKUP_FOLDER_ID를 직접 지정하세요.');
+  properties.setProperty('BACKUP_FOLDER_ID',folder.getId());
+ }
+
  syncDrive(); // 최초 동기화 성공 후 트리거를 생성합니다.
  ScriptApp.getProjectTriggers().filter(t=>t.getHandlerFunction()==='syncDrive').forEach(t=>ScriptApp.deleteTrigger(t));
- ScriptApp.newTrigger('syncDrive').timeBased().everyMinutes(15).create();
+ ScriptApp.newTrigger('syncDrive').timeBased().everyDays(1).atHour(4).nearMinute(15).inTimezone('Asia/Seoul').create();
 }
 function token_(){return ScriptApp.getOAuthToken();}
 function field_(v){return typeof v==='number'?{integerValue:String(v)}:{stringValue:String(v)};}
