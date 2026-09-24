@@ -41,3 +41,13 @@ test('selecting a card keeps option nodes intact; changed list resets missing se
  const ctx={Option:function(label,value){this.label=label;this.value=value;}};vm.createContext(ctx);vm.runInContext(part,ctx);
  const items=[{value:'1',label:'A · 100원'},{value:'2',label:'B · 50원'}];ctx.options(el,items,'전체 카드');el.value='2';ctx.options(el,items,'전체 카드');assert.equal(replacements,1);assert.equal(el.value,'2');ctx.options(el,[items[0]],'전체 카드');assert.equal(replacements,2);assert.equal(el.value,'');
 });
+test('month and card tap immediately close custom picker and dispatch selection',()=>{
+ const source=fs.readFileSync(require.resolve('../public/app.js'),'utf8');const part=source.slice(source.indexOf('function openPicker'),source.indexOf("$('month-picker').onclick"));
+ for(const id of ['month','card']){const order=[],buttons=[];const select={value:'a',options:[{value:'a',textContent:'A'},{value:'b',textContent:'B'}],dispatchEvent:e=>order.push(e.type)};const nodes={[id]:select,'quick-picker':{showModal(){},close:()=>order.push('close')},'picker-title':{},'picker-options':{replaceChildren(){},append:b=>buttons.push(b),querySelector:()=>null}};const ctx={$:key=>nodes[key],text:()=>({setAttribute(){}}),Event:function(type){this.type=type;}};vm.createContext(ctx);vm.runInContext(part,ctx);ctx.openPicker(id);buttons[1].onclick();assert.equal(select.value,'b');assert.deepEqual(order,['close','change']);}
+});
+test('monthly chart totals include refunds and zero months across year boundary',()=>{
+ const source=fs.readFileSync(require.resolve('../public/app.js'),'utf8');const part=source.slice(source.indexOf('function monthlyTotals'),source.indexOf('function drawMonthlyStats'));
+ const ctx={};vm.createContext(ctx);vm.runInContext(part,ctx);
+ const rows=ctx.monthlyTotals([{date:'2025-12-01',amount:100},{date:'2025-12-02',amount:-20},{date:'2026-02-01',amount:-30}]);
+ assert.equal(JSON.stringify(rows),JSON.stringify([{month:'2026-02',amount:-30},{month:'2026-01',amount:0},{month:'2025-12',amount:80}]));assert.equal(ctx.monthlyTotals([]).length,0);
+});
