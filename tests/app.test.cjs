@@ -42,7 +42,7 @@ test('selecting a card keeps option nodes intact; changed list resets missing se
  const items=[{value:'1',label:'A · 100원'},{value:'2',label:'B · 50원'}];ctx.options(el,items,'전체 카드');el.value='2';ctx.options(el,items,'전체 카드');assert.equal(replacements,1);assert.equal(el.value,'2');ctx.options(el,[items[0]],'전체 카드');assert.equal(replacements,2);assert.equal(el.value,'');
 });
 test('month and card tap immediately close custom picker and dispatch selection',()=>{
- const source=fs.readFileSync(require.resolve('../public/app.js'),'utf8');const part=source.slice(source.indexOf('function openPicker'),source.indexOf("$('month-picker').onclick"));
+ const source=fs.readFileSync(require.resolve('../public/app.js'),'utf8');const part=source.slice(source.indexOf('function openPicker'),source.indexOf("$('category-picker').onclick"));
  for(const id of ['month','card']){const order=[],buttons=[];const select={value:'a',options:[{value:'a',textContent:'A'},{value:'b',textContent:'B'}],dispatchEvent:e=>order.push(e.type)};const nodes={[id]:select,'quick-picker':{showModal(){},close:()=>order.push('close')},'picker-title':{},'picker-options':{replaceChildren(){},append:b=>buttons.push(b),querySelector:()=>null}};const ctx={appendPickerProgress(){},$:key=>nodes[key],text:()=>({setAttribute(){}}),Event:function(type){this.type=type;}};vm.createContext(ctx);vm.runInContext(part,ctx);ctx.openPicker(id);buttons[1].onclick();assert.equal(select.value,'b');assert.deepEqual(order,['close','change']);}
 });
 test('monthly chart totals include refunds and zero months across year boundary',()=>{
@@ -60,4 +60,9 @@ test('setup resolves named folder and replaces old sync trigger with daily Seoul
 test('target thresholds and inherited merged-card target',()=>{
  const source=fs.readFileSync(require.resolve('../public/app.js'),'utf8');const part=source.slice(source.indexOf('function cardTarget'),source.indexOf('function goalElement'));const ctx={state:{targets:{'2':500000}}};vm.createContext(ctx);vm.runInContext(part,ctx);
  assert.equal(ctx.goalProgress(499999,500000).color,'green');assert.equal(ctx.goalProgress(500000,500000).color,'yellow');assert.equal(ctx.goalProgress(599999,500000).color,'yellow');assert.equal(ctx.goalProgress(600000,500000).color,'red');assert.equal(ctx.goalProgress(700000,500000).width,100);assert.equal(ctx.goalProgress(-100,500000).width,0);assert.equal(ctx.goalProgress(100,0),null);assert.equal(ctx.cardTarget({id:1,sourceIds:['1','2']}),500000);
+});
+test('consumption classification prioritizes backup label and shared correction; refunds reduce category total',()=>{
+ const source=fs.readFileSync(require.resolve('../public/app.js'),'utf8');const part=source.slice(source.indexOf('const CONSUMPTION_CATEGORIES'),source.indexOf('function drawCategorySummary'));const ctx={categoryOverrides:{}};vm.createContext(ctx);vm.runInContext(part,ctx);
+ assert.equal(ctx.inferCategory({store:'서울병원'}),'병원');assert.equal(ctx.inferCategory({store:'쿠팡',backupCategory:'외식'}),'외식');assert.equal(ctx.inferCategory({store:'정체불명결제',backupCategory:'17'}),'미분류');assert.equal(ctx.inferCategory({store:'서울택시'}),'교통비');
+ const r={id:1,sourceCardId:2,date:'2026-09-01',time:'12:00',amount:100,store:'쿠팡'};ctx.categoryOverrides[ctx.categoryKey(r)]='교육/육아';assert.equal(ctx.consumptionCategory(r),'교육/육아');const totals=ctx.categorySums([{store:'식당',amount:100},{store:'식당',amount:-30}]);assert.equal(totals[0][1],70);
 });
