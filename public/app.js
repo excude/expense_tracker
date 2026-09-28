@@ -15,7 +15,7 @@ function notify(message,error=false){$('notice').textContent=message;$('notice')
 function options(el,items,all){const signature=JSON.stringify([all,items]);if(el.dataset.optionsSignature===signature)return;el.dataset.optionsSignature=signature;const selected=el.value;el.replaceChildren(new Option(all,''),...items.map(x=>new Option(x.label,x.value)));el.value=items.some(x=>String(x.value)===selected)?selected:'';}
 function show(data){state.data=data;const selected=$('month').value;const months=[...new Set(data.records.map(r=>r.date.slice(0,7)))].sort().reverse();$('month').replaceChildren(...months.map(m=>new Option(m,m)));$('month').value=months.includes(selected)?selected:(data.latestMonth||months[0]||'');state.initialized=true;render();}
 async function run(fn){if(state.busy)return;state.busy=true;notify('');try{await fn();}catch(e){notify(e.code?.startsWith('auth/')?'로그인 정보를 확인해 주세요.':e.message,true);}finally{state.busy=false;render();}}
-function parse(bytes){return new Promise((resolve,reject)=>{const worker=new Worker('./parse-worker.js?v=0.13');const timer=setTimeout(()=>{worker.terminate();reject(Error('백업 분석 시간이 초과되었습니다.'));},60000);worker.onmessage=({data})=>{clearTimeout(timer);worker.terminate();data.error?reject(Error(data.error)):resolve(data);};worker.onerror=()=>{clearTimeout(timer);worker.terminate();reject(Error('백업 분석에 실패했습니다.'));};worker.postMessage(bytes,[bytes]);});}
+function parse(bytes){return new Promise((resolve,reject)=>{const worker=new Worker('./parse-worker.js?v=0.14');const timer=setTimeout(()=>{worker.terminate();reject(Error('백업 분석 시간이 초과되었습니다.'));},60000);worker.onmessage=({data})=>{clearTimeout(timer);worker.terminate();data.error?reject(Error(data.error)):resolve(data);};worker.onerror=()=>{clearTimeout(timer);worker.terminate();reject(Error('백업 분석에 실패했습니다.'));};worker.postMessage(bytes,[bytes]);});}
 async function loadSnapshot(meta,epoch){
  if(!meta){show({records:[],cards:[]});return;}
  const ref=db.doc('users/'+cfg.ledgerId+'/snapshots/'+meta.snapshotId);
@@ -43,7 +43,7 @@ async function cleanup(){
  const old=await db.collection('users/'+cfg.ledgerId+'/snapshots').where('updatedAt','<',cutoff).limit(30).get();
  const current=(await db.doc('users/'+cfg.ledgerId+'/meta/current').get()).data();
  for(const doc of old.docs){if(doc.id===current?.snapshotId)continue;const chunks=await doc.ref.collection('chunks').get();const batch=db.batch();
-   let savedRule=null;chunks.docs.forEach(d=>batch.delete(d.ref));batch.delete(doc.ref);await batch.commit();}
+   chunks.docs.forEach(d=>batch.delete(d.ref));batch.delete(doc.ref);await batch.commit();}
 }
 function text(tag,value,cls){const el=document.createElement(tag);el.textContent=value;if(cls)el.className=cls;return el;}
 function cardExcluded(card){return (card.sourceIds||[String(card.id)]).some(id=>state.excluded.includes(String(id)));}
@@ -70,7 +70,7 @@ function consumptionCategory(r){const key=categoryKey(r),rule=merchantRules.get(
 function categorySums(records){const totals=new Map();for(const r of records){const key=consumptionCategory(r);totals.set(key,(totals.get(key)||0)+r.amount);}return [...totals].sort((a,b)=>b[1]-a[1]);}
 function drawCategorySummary(records){const root=$('category-summary');root.replaceChildren(text('p','선택 월·카드·검색 기준 분류별 순사용액','muted'));for(const [category,amount] of categorySums(records)){const button=text('button',category+' · '+won(amount),'secondary');button.type='button';button.onclick=()=>{$('category').value=category;state.page=0;render();};root.append(button);}}
 function openCategoryEditor(record){
- if(state.role!=='editor'||state.busy)return;
+ if(state.role!=='editor')return;
  editingRecord=record;
  $('category-edit-title').textContent=(record.store||'가맹점 없음')+' 분류';
  const scope=$('category-edit-same');scope.checked=!!merchantName(record);scope.disabled=!merchantName(record);
@@ -83,6 +83,7 @@ function openCategoryEditor(record){
    const target=editingRecord;const userId=auth.currentUser?.uid;const same=scope.checked&&!!merchantName(target);
    const ref=db.collection('users/'+cfg.ledgerId+'/transactionCategories').doc(categoryKey(target));
    const batch=db.batch();
+   let savedRule=null;
    if(same){
     const name=merchantName(target);const key=await merchantKey(name);
     const rule=db.collection('users/'+cfg.ledgerId+'/merchantCategories').doc(key);

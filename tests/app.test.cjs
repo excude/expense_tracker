@@ -79,3 +79,14 @@ test('merchant changes update existing overrides; later individual corrections w
  ctx.merchantRules.delete(ctx.merchantName(first));assert.equal(ctx.consumptionCategory(first),'미분류');assert.equal(ctx.consumptionCategory(next),'기타');
  assert.equal(ctx.merchantName({store:'  '}),'');
 });
+test('admin category button opens, commits merchant rule and closes; viewer cannot open',async()=>{
+ const source=fs.readFileSync(require.resolve('../public/app.js'),'utf8');
+ const nodes={};const $=id=>nodes[id]||(nodes[id]={children:[],replaceChildren(){this.children=[]},append(x){this.children.push(x)},showModal(){this.open=true},close(){this.open=false}});
+ let committed=false;const writes=[];
+ const ctx={state:{role:'editor',busy:false},editingRecord:null,$,text:(tag,label)=>({label}),merchantName:r=>r.store,merchantKey:async()=> 'merchant-id',categoryKey:r=>String(r.id),CONSUMPTION_CATEGORIES:['보험','미분류'],auth:{currentUser:{uid:'admin'}},cfg:{ledgerId:'shared'},crypto:require('node:crypto').webcrypto,merchantRules:new Map(),categoryOverrides:{},categoryRevisions:{},render(){},notify(){},run:fn=>fn(),db:{collection:path=>({doc:id=>path+'/'+id}),batch:()=>({set:(ref,value)=>writes.push({ref,value}),delete:ref=>writes.push({ref,deleted:true}),commit:async()=>{committed=true}})}};
+ vm.createContext(ctx);vm.runInContext('"use strict";\n'+source.slice(source.indexOf('function openCategoryEditor('),source.indexOf("$('category-edit-close')")),ctx);
+ ctx.openCategoryEditor({store:'보험사',id:1});assert.equal($('category-edit').open,true);
+ await $('category-edit-options').children.find(b=>b.label==='보험').onclick();
+ assert.equal(committed,true);assert.equal($('category-edit').open,false);assert.equal(ctx.merchantRules.get('보험사').category,'보험');assert.equal(writes.find(w=>w.value)?.value.category,'보험');
+ ctx.state.role='viewer';ctx.openCategoryEditor({store:'보험사',id:1});assert.equal($('category-edit').open,false);
+});
