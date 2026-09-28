@@ -14,3 +14,5 @@
 .goal-box{display:block;margin-top:10px}.goal-caption{display:block;font-size:12px;font-weight:400;color:#536075}.goal-track{display:block;width:100%;height:9px;background:#dfe4eb;border-radius:6px;margin-top:7px;overflow:hidden}.goal-fill{display:block;height:100%;border-radius:6px}.goal-fill.green{background:#249451}.goal-fill.yellow{background:#e7b51b}.goal-fill.red{background:#d83a40}
 
 .filters{flex-wrap:wrap}.category-summary{padding:16px;margin-bottom:20px;display:flex;gap:8px;flex-wrap:wrap}.category-summary>p{width:100%;margin:0 0 8px;font-size:13px}.category-badge{display:inline-block!important;margin-top:8px!important;padding:3px 8px;min-height:0;border-radius:12px;background:#eef1f6;color:#526079!important;font-size:12px!important;font-weight:500}#category-edit-options{display:grid;gap:6px;max-height:60vh;overflow:auto}
+
+.category-scope{display:flex;align-items:center;gap:8px;margin:16px 0}.category-scope input{width:auto}
