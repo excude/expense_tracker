@@ -7,6 +7,7 @@ let merchantStop;
 let merchantRules=new Map();
 let merchantsReady=false;
 let categoryOverrides={};
+let categoryRevisions={};
 let categoriesReady=false;
 let editingRecord=null;
 let auth, db, stop, accessStop, settingsStop, generation=0;
@@ -14,7 +15,7 @@ function notify(message,error=false){$('notice').textContent=message;$('notice')
 function options(el,items,all){const signature=JSON.stringify([all,items]);if(el.dataset.optionsSignature===signature)return;el.dataset.optionsSignature=signature;const selected=el.value;el.replaceChildren(new Option(all,''),...items.map(x=>new Option(x.label,x.value)));el.value=items.some(x=>String(x.value)===selected)?selected:'';}
 function show(data){state.data=data;const selected=$('month').value;const months=[...new Set(data.records.map(r=>r.date.slice(0,7)))].sort().reverse();$('month').replaceChildren(...months.map(m=>new Option(m,m)));$('month').value=months.includes(selected)?selected:(data.latestMonth||months[0]||'');state.initialized=true;render();}
 async function run(fn){if(state.busy)return;state.busy=true;notify('');try{await fn();}catch(e){notify(e.code?.startsWith('auth/')?'로그인 정보를 확인해 주세요.':e.message,true);}finally{state.busy=false;render();}}
-function parse(bytes){return new Promise((resolve,reject)=>{const worker=new Worker('./parse-worker.js?v=0.11');const timer=setTimeout(()=>{worker.terminate();reject(Error('백업 분석 시간이 초과되었습니다.'));},60000);worker.onmessage=({data})=>{clearTimeout(timer);worker.terminate();data.error?reject(Error(data.error)):resolve(data);};worker.onerror=()=>{clearTimeout(timer);worker.terminate();reject(Error('백업 분석에 실패했습니다.'));};worker.postMessage(bytes,[bytes]);});}
+function parse(bytes){return new Promise((resolve,reject)=>{const worker=new Worker('./parse-worker.js?v=0.13');const timer=setTimeout(()=>{worker.terminate();reject(Error('백업 분석 시간이 초과되었습니다.'));},60000);worker.onmessage=({data})=>{clearTimeout(timer);worker.terminate();data.error?reject(Error(data.error)):resolve(data);};worker.onerror=()=>{clearTimeout(timer);worker.terminate();reject(Error('백업 분석에 실패했습니다.'));};worker.postMessage(bytes,[bytes]);});}
 async function loadSnapshot(meta,epoch){
  if(!meta){show({records:[],cards:[]});return;}
  const ref=db.doc('users/'+cfg.ledgerId+'/snapshots/'+meta.snapshotId);
@@ -41,7 +42,8 @@ async function cleanup(){
  const cutoff=new Date(Date.now()-86400000).toISOString();
  const old=await db.collection('users/'+cfg.ledgerId+'/snapshots').where('updatedAt','<',cutoff).limit(30).get();
  const current=(await db.doc('users/'+cfg.ledgerId+'/meta/current').get()).data();
- for(const doc of old.docs){if(doc.id===current?.snapshotId)continue;const chunks=await doc.ref.collection('chunks').get();const batch=db.batch();chunks.docs.forEach(d=>batch.delete(d.ref));batch.delete(doc.ref);await batch.commit();}
+ for(const doc of old.docs){if(doc.id===current?.snapshotId)continue;const chunks=await doc.ref.collection('chunks').get();const batch=db.batch();
+   let savedRule=null;chunks.docs.forEach(d=>batch.delete(d.ref));batch.delete(doc.ref);await batch.commit();}
 }
 function text(tag,value,cls){const el=document.createElement(tag);el.textContent=value;if(cls)el.className=cls;return el;}
 function cardExcluded(card){return (card.sourceIds||[String(card.id)]).some(id=>state.excluded.includes(String(id)));}
@@ -59,12 +61,12 @@ function drawAdmin(){const root=$('admin-cards');root.replaceChildren(text('p',(
 $('admin-button').onclick=()=>{if(state.role!=='editor'||!state.settingsReady)return;drawAdmin();$('card-admin').showModal();};
 $('admin-close').onclick=()=>$('card-admin').close();
 $('admin-form').onsubmit=e=>{e.preventDefault();run(async()=>{if(state.role!=='editor'||!state.settingsReady)throw Error('관리자 권한이 필요합니다.');const excluded=new Set(state.excluded),nicknames={...state.nicknames},targets={...state.targets};for(const row of $('admin-cards').querySelectorAll('.admin-card')){const card=state.data.cards.find(c=>String(c.id)===row.dataset.cardId);const target=Number(row.querySelector('input[type=number]').value);if(!Number.isSafeInteger(target)||target<0||target>1000000000000)throw Error('목표금액은 0 이상의 정수로 입력하세요.');for(const id of card.sourceIds||[String(card.id)]){if(row.querySelector('input[type=checkbox]').checked)excluded.delete(String(id));else excluded.add(String(id));const value=row.querySelector('input[type=text]').value.trim();if(value)nicknames[String(id)]=value;else delete nicknames[String(id)];if(target>0)targets[String(id)]=target;else delete targets[String(id)];}}await db.doc('users/'+cfg.ledgerId+'/meta/cardSettings').set({excludedCardIds:[...excluded],nicknames,targets,updatedAt:new Date().toISOString()});$('card-admin').close();notify('모든 사용자에게 카드 설정을 저장했습니다.');});};
-const CONSUMPTION_CATEGORIES=['쇼핑','외식','식료품','카페/간식','교통비','주유','병원','교육/육아','주거/통신','여가/여행','기타','미분류'];
-function inferCategory(record){const raw=String(record.backupCategory||'').trim();if(CONSUMPTION_CATEGORIES.includes(raw))return raw;const aliases={'의료':'병원','의료/건강':'병원','교통':'교통비','식비':'외식','마트':'식료품','문화':'여가/여행','통신':'주거/통신'};if(aliases[raw])return aliases[raw];const name=record.store||'';for(const [category,pattern] of [['병원',/병원|의원|약국|치과|한의원/],['주유',/주유소|충전소/],['교통비',/택시|철도|코레일|지하철|고속버스|시외버스|주차|하이패스|통행료|티머니/],['카페/간식',/스타벅스|투썸|메가커피|컴포즈|커피|카페|베이커리|파리바게뜨|뚜레쥬르/],['식료품',/이마트|홈플러스|롯데마트|하나로마트|슈퍼마켓|식자재|편의점|GS25|CU[ (]|세븐일레븐/],['외식',/배달의민족|우아한형제들|요기요|쿠팡이츠|식당|음식점|치킨|피자|김밥|국밥|삼겹|갈비|버거|맥도날드|분식|초밥/],['교육/육아',/어린이집|유치원|학원|키즈|문화센터/],['주거/통신',/관리비|도시가스|한국전력|통신요금|인터넷요금/],['여가/여행',/호텔|리조트|항공|영화|CGV|메가박스|놀이공원/],['쇼핑',/쿠팡|백화점|다이소|올리브영|무신사|11번가|옥션|G마켓/]])if(pattern.test(name))return category;return '미분류';}
+const CONSUMPTION_CATEGORIES=['쇼핑','외식','식료품','카페/간식','교통비','주유','병원','보험','교육/육아','주거/통신','여가/여행','기타','미분류'];
+function inferCategory(record){const raw=String(record.backupCategory||'').trim();if(CONSUMPTION_CATEGORIES.includes(raw))return raw;const aliases={'보험료':'보험','의료':'병원','의료/건강':'병원','교통':'교통비','식비':'외식','마트':'식료품','문화':'여가/여행','통신':'주거/통신'};if(aliases[raw])return aliases[raw];const name=record.store||'';for(const [category,pattern] of [['보험',/보험료|손해보험|생명보험|삼성화재|삼성생명|한화생명|교보생명|현대해상|메리츠화재|흥국화재|흥국생명|DB생명|동양생명|라이나생명|AIA생명|푸본현대생명/i],['병원',/병원|의원|약국|치과|한의원/],['주유',/주유소|충전소/],['교통비',/택시|철도|코레일|지하철|고속버스|시외버스|주차|하이패스|통행료|티머니/],['카페/간식',/스타벅스|투썸|메가커피|컴포즈|커피|카페|베이커리|파리바게뜨|뚜레쥬르/],['식료품',/이마트|홈플러스|롯데마트|하나로마트|슈퍼마켓|식자재|편의점|GS25|CU[ (]|세븐일레븐/],['외식',/배달의민족|우아한형제들|요기요|쿠팡이츠|식당|음식점|치킨|피자|김밥|국밥|삼겹|갈비|버거|맥도날드|분식|초밥/],['교육/육아',/어린이집|유치원|학원|키즈|문화센터/],['주거/통신',/관리비|도시가스|한국전력|통신요금|인터넷요금/],['여가/여행',/호텔|리조트|항공|영화|CGV|메가박스|놀이공원/],['쇼핑',/쿠팡|백화점|다이소|올리브영|무신사|11번가|옥션|G마켓/]])if(pattern.test(name))return category;return '미분류';}
 function categoryKey(r){return encodeURIComponent([r.id,r.sourceCardId??r.cardId,r.date,r.time,r.amount].join('|'));}
 function merchantName(record){return String(record.store||'').trim().replace(/\s+/g,' ').toLowerCase();}
 async function merchantKey(name){const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(name));return Array.from(new Uint8Array(bytes),b=>b.toString(16).padStart(2,'0')).join('');}
-function consumptionCategory(r){return categoryOverrides[categoryKey(r)]||merchantRules.get(merchantName(r))||inferCategory(r);}
+function consumptionCategory(r){const key=categoryKey(r),rule=merchantRules.get(merchantName(r));if(rule){if(categoryOverrides[key]&&categoryRevisions[key]===rule.revision)return categoryOverrides[key];return rule.category;}return categoryOverrides[key]||inferCategory(r);}
 function categorySums(records){const totals=new Map();for(const r of records){const key=consumptionCategory(r);totals.set(key,(totals.get(key)||0)+r.amount);}return [...totals].sort((a,b)=>b[1]-a[1]);}
 function drawCategorySummary(records){const root=$('category-summary');root.replaceChildren(text('p','선택 월·카드·검색 기준 분류별 순사용액','muted'));for(const [category,amount] of categorySums(records)){const button=text('button',category+' · '+won(amount),'secondary');button.type='button';button.onclick=()=>{$('category').value=category;state.page=0;render();};root.append(button);}}
 function openCategoryEditor(record){
@@ -72,7 +74,7 @@ function openCategoryEditor(record){
  editingRecord=record;
  $('category-edit-title').textContent=(record.store||'가맹점 없음')+' 분류';
  const scope=$('category-edit-same');scope.checked=!!merchantName(record);scope.disabled=!merchantName(record);
- $('category-edit-help').textContent=merchantName(record)?'같은 가맹점의 기존 거래와 앞으로 들어오는 거래에 적용합니다. 개별 지정한 거래는 해당 분류를 유지합니다.':'가맹점명이 없어 이 거래에만 적용합니다.';
+ $('category-edit-help').textContent=merchantName(record)?'같은 가맹점의 기존 거래와 앞으로 들어오는 거래에 적용합니다. 이전에 개별 지정한 거래도 함께 변경합니다.':'가맹점명이 없어 이 거래에만 적용합니다.';
  const root=$('category-edit-options');root.replaceChildren();
  for(const category of ['자동 분류로 복원',...CONSUMPTION_CATEGORIES]){
   const button=text('button',category,'picker-option');button.type='button';
@@ -84,11 +86,16 @@ function openCategoryEditor(record){
    if(same){
     const name=merchantName(target);const key=await merchantKey(name);
     const rule=db.collection('users/'+cfg.ledgerId+'/merchantCategories').doc(key);
-    if(category==='자동 분류로 복원')batch.delete(rule);else batch.set(rule,{merchant:name,category});
+    if(category==='자동 분류로 복원')batch.delete(rule);else {savedRule={merchant:name,category,revision:crypto.randomUUID()};batch.set(rule,savedRule);}
     batch.delete(ref);
-   }else if(category==='자동 분류로 복원')batch.delete(ref);else batch.set(ref,{category});
+   }else if(category==='자동 분류로 복원')batch.delete(ref);else batch.set(ref,{category,ruleRevision:merchantRules.get(merchantName(target))?.revision||null});
    if(state.role!=='editor'||auth.currentUser?.uid!==userId)throw Error('로그인 상태가 변경되었습니다.');
-   await batch.commit();$('category-edit').close();
+   await batch.commit();
+   if(auth.currentUser?.uid!==userId)return;
+   if(same){if(savedRule)merchantRules.set(merchantName(target),savedRule);else merchantRules.delete(merchantName(target));delete categoryOverrides[categoryKey(target)];delete categoryRevisions[categoryKey(target)];}
+   else if(category==='자동 분류로 복원'){delete categoryOverrides[categoryKey(target)];delete categoryRevisions[categoryKey(target)];}
+   else{categoryOverrides[categoryKey(target)]=category;categoryRevisions[categoryKey(target)]=merchantRules.get(merchantName(target))?.revision||null;}
+   $('category-edit').close();render();notify('분류를 저장했습니다. 같은 가맹점 전체 적용 시 기존 거래에도 바로 반영됩니다.');
   });root.append(button);
  }
  $('category-edit').showModal();
@@ -114,7 +121,7 @@ $('prev').onclick=()=>{state.page--;render();};$('next').onclick=()=>{state.page
 (async()=>{try{
  if(cfg.firebase.projectId.startsWith('REPLACE_'))throw Error('설정이 필요합니다. README의 Firebase 설정을 먼저 완료해 주세요.');
  firebase.initializeApp(cfg.firebase);auth=firebase.auth();db=firebase.firestore();await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
- function clearView(){merchantStop?.();merchantStop=null;merchantRules=new Map();merchantsReady=false;categoryStop?.();categoryStop=null;categoryOverrides={};categoriesReady=false;editingRecord=null;$('category-edit').close();settingsStop?.();settingsStop=null;state.settingsReady=false;state.excluded=[];state.nicknames={};state.targets={};state.role=null;$('admin-button').hidden=true;$('card-admin').close();$('quick-picker').close();$('monthly-stats').close();stop?.();stop=null;++generation;state.initialized=false;state.data={records:[],cards:[]};render();$('dashboard').hidden=true;$('login').hidden=false;}
+ function clearView(){merchantStop?.();merchantStop=null;merchantRules=new Map();merchantsReady=false;categoryStop?.();categoryStop=null;categoryOverrides={};categoryRevisions={};categoriesReady=false;editingRecord=null;$('category-edit').close();settingsStop?.();settingsStop=null;state.settingsReady=false;state.excluded=[];state.nicknames={};state.targets={};state.role=null;$('admin-button').hidden=true;$('card-admin').close();$('quick-picker').close();$('monthly-stats').close();stop?.();stop=null;++generation;state.initialized=false;state.data={records:[],cards:[]};render();$('dashboard').hidden=true;$('login').hidden=false;}
  auth.onAuthStateChanged(user=>{
   accessStop?.();accessStop=null;clearView();$('logout').hidden=!user;
   if(!user)return;
@@ -126,8 +133,8 @@ $('prev').onclick=()=>{state.page--;render();};$('next').onclick=()=>{state.page
    if(!permission?.enabled){notify('접근이 허용되지 않은 계정입니다. 관리자에게 등록을 요청해 주세요.',true);return;}
    notify('');$('dashboard').hidden=false;$('login').hidden=true;
    state.role=permission.role;
-   merchantStop=db.collection('users/'+cfg.ledgerId+'/merchantCategories').onSnapshot(snapshot=>{if(auth.currentUser?.uid!==identity)return;merchantRules=new Map();snapshot.forEach(doc=>{const value=doc.data();if(typeof value.merchant==='string'&&value.merchant&&CONSUMPTION_CATEGORIES.includes(value.category))merchantRules.set(value.merchant,value.category);});merchantsReady=true;render();},()=>{merchantsReady=false;render();notify('가맹점 자동 분류 설정을 불러오지 못했습니다. 새로고침해 주세요.',true);});
-   categoryStop=db.collection('users/'+cfg.ledgerId+'/transactionCategories').onSnapshot(snapshot=>{if(auth.currentUser?.uid!==identity)return;categoryOverrides={};snapshot.forEach(doc=>{const value=doc.data().category;if(CONSUMPTION_CATEGORIES.includes(value))categoryOverrides[doc.id]=value;});categoriesReady=true;render();},()=>{categoriesReady=false;render();notify('소비 분류 설정을 불러오지 못했습니다. 새로고침해 주세요.',true);});
+   merchantStop=db.collection('users/'+cfg.ledgerId+'/merchantCategories').onSnapshot(snapshot=>{if(auth.currentUser?.uid!==identity)return;merchantRules=new Map();snapshot.forEach(doc=>{const value=doc.data();if(typeof value.merchant==='string'&&value.merchant&&CONSUMPTION_CATEGORIES.includes(value.category))merchantRules.set(value.merchant,{category:value.category,revision:value.revision||'legacy'});});merchantsReady=true;render();},()=>{merchantsReady=false;render();notify('가맹점 자동 분류 설정을 불러오지 못했습니다. 새로고침해 주세요.',true);});
+   categoryStop=db.collection('users/'+cfg.ledgerId+'/transactionCategories').onSnapshot(snapshot=>{if(auth.currentUser?.uid!==identity)return;categoryOverrides={};categoryRevisions={};snapshot.forEach(doc=>{const data=doc.data(),value=data.category;if(CONSUMPTION_CATEGORIES.includes(value)){categoryOverrides[doc.id]=value;categoryRevisions[doc.id]=data.ruleRevision||null;}});categoriesReady=true;render();},()=>{categoriesReady=false;render();notify('소비 분류 설정을 불러오지 못했습니다. 새로고침해 주세요.',true);});
 
    $('backup-file').closest('label').hidden=permission.role!=='editor';
    settingsStop=db.doc('users/'+cfg.ledgerId+'/meta/cardSettings').onSnapshot(snapshot=>{if(auth.currentUser?.uid!==identity)return;const settings=snapshot.data()||{};state.excluded=Array.isArray(settings.excludedCardIds)?settings.excludedCardIds.map(String):[];state.nicknames=settings.nicknames||{};state.targets=settings.targets||{};state.settingsReady=true;state.page=0;$('admin-button').hidden=state.role!=='editor';render();},()=>{state.settingsReady=false;$('admin-button').hidden=true;$('card-admin').close();render();notify('공통 카드 설정을 불러오지 못했습니다. 새로고침해 주세요.',true);});

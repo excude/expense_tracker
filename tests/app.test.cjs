@@ -62,18 +62,20 @@ test('target thresholds and inherited merged-card target',()=>{
  assert.equal(ctx.goalProgress(499999,500000).color,'green');assert.equal(ctx.goalProgress(500000,500000).color,'yellow');assert.equal(ctx.goalProgress(599999,500000).color,'yellow');assert.equal(ctx.goalProgress(600000,500000).color,'red');assert.equal(ctx.goalProgress(700000,500000).width,100);assert.equal(ctx.goalProgress(-100,500000).width,0);assert.equal(ctx.goalProgress(100,0),null);assert.equal(ctx.cardTarget({id:1,sourceIds:['1','2']}),500000);
 });
 test('consumption classification prioritizes backup label and shared correction; refunds reduce category total',()=>{
- const source=fs.readFileSync(require.resolve('../public/app.js'),'utf8');const part=source.slice(source.indexOf('const CONSUMPTION_CATEGORIES'),source.indexOf('function drawCategorySummary'));const ctx={categoryOverrides:{},merchantRules:new Map()};vm.createContext(ctx);vm.runInContext(part,ctx);
+ const source=fs.readFileSync(require.resolve('../public/app.js'),'utf8');const part=source.slice(source.indexOf('const CONSUMPTION_CATEGORIES'),source.indexOf('function drawCategorySummary'));const ctx={categoryOverrides:{},categoryRevisions:{},merchantRules:new Map()};vm.createContext(ctx);vm.runInContext(part,ctx);
  assert.equal(ctx.inferCategory({store:'서울병원'}),'병원');assert.equal(ctx.inferCategory({store:'쿠팡',backupCategory:'외식'}),'외식');assert.equal(ctx.inferCategory({store:'정체불명결제',backupCategory:'17'}),'미분류');assert.equal(ctx.inferCategory({store:'서울택시'}),'교통비');
  const r={id:1,sourceCardId:2,date:'2026-09-01',time:'12:00',amount:100,store:'쿠팡'};ctx.categoryOverrides[ctx.categoryKey(r)]='교육/육아';assert.equal(ctx.consumptionCategory(r),'교육/육아');const totals=ctx.categorySums([{store:'식당',amount:100},{store:'식당',amount:-30}]);assert.equal(totals[0][1],70);
 });
 
-test('learned merchant categories apply to future records and preserve individual overrides',()=>{
- const source=fs.readFileSync(require.resolve('../public/app.js'),'utf8');const part=source.slice(source.indexOf('const CONSUMPTION_CATEGORIES'),source.indexOf('function drawCategorySummary'));const ctx={categoryOverrides:{},merchantRules:new Map()};vm.createContext(ctx);vm.runInContext(part,ctx);
+test('merchant changes update existing overrides; later individual corrections work until next merchant change',()=>{
+ const source=fs.readFileSync(require.resolve('../public/app.js'),'utf8');const part=source.slice(source.indexOf('const CONSUMPTION_CATEGORIES'),source.indexOf('function drawCategorySummary'));const ctx={categoryOverrides:{},categoryRevisions:{},merchantRules:new Map()};vm.createContext(ctx);vm.runInContext(part,ctx);
  const first={store:'  ABC   강남점 ',id:1,amount:100};assert.equal(ctx.consumptionCategory(first),'미분류');
- ctx.merchantRules.set(ctx.merchantName(first),'쇼핑');
+ ctx.merchantRules.set(ctx.merchantName(first),{category:'쇼핑',revision:'one'});
  const next={store:'abc 강남점',id:2,amount:200};assert.equal(ctx.consumptionCategory(next),'쇼핑');
  assert.equal(ctx.consumptionCategory({store:'ABC 강북점'}),'미분류');
- ctx.categoryOverrides[ctx.categoryKey(next)]='기타';assert.equal(ctx.consumptionCategory(next),'기타');
+ ctx.categoryOverrides[ctx.categoryKey(next)]='기타';assert.equal(ctx.consumptionCategory(next),'쇼핑');
+ ctx.categoryRevisions[ctx.categoryKey(next)]='one';assert.equal(ctx.consumptionCategory(next),'기타');
+ ctx.merchantRules.set(ctx.merchantName(first),{category:'보험',revision:'two'});assert.equal(ctx.consumptionCategory(first),'보험');assert.equal(ctx.consumptionCategory(next),'보험');
  ctx.merchantRules.delete(ctx.merchantName(first));assert.equal(ctx.consumptionCategory(first),'미분류');assert.equal(ctx.consumptionCategory(next),'기타');
  assert.equal(ctx.merchantName({store:'  '}),'');
 });
