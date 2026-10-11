@@ -90,3 +90,26 @@ test('admin category button opens, commits merchant rule and closes; viewer cann
  assert.equal(committed,true);assert.equal($('category-edit').open,false);assert.equal(ctx.merchantRules.get('보험사').category,'보험');assert.equal(writes.find(w=>w.value)?.value.category,'보험');
  ctx.state.role='viewer';ctx.openCategoryEditor({store:'보험사',id:1});assert.equal($('category-edit').open,false);
 });
+test('manual Drive check verifies caller through Firestore and blocks viewers before sync',()=>{
+ const source=fs.readFileSync(require.resolve('../bridge/Code.gs'),'utf8');
+ for(const role of ['viewer','editor']){
+  const calls=[],results=[];const store={PROJECT_ID:'project'};const requestId='11111111-1111-4111-8111-111111111111';
+  const ctx={Date,Number,JSON,Object,Error,PropertiesService:{getScriptProperties:()=>({getProperty:k=>store[k]})},Utilities:{base64DecodeWebSafe:()=>[],newBlob:()=>({getDataAsString:()=>JSON.stringify({email:'admin@example.com',sub:'uid'})})},ContentService:{createTextOutput:s=>s}};
+  vm.createContext(ctx);vm.runInContext(source,ctx);
+  ctx.request_=(url,options)=>{
+   calls.push({url,token:options.headers.Authorization});
+   if(url.includes('/access/'))return {fields:{enabled:{booleanValue:true},role:{stringValue:role}}};
+   return {updateTime:'version',fields:{requestId:{stringValue:requestId},requestedBy:{stringValue:'uid'},status:{stringValue:'queued'},createdAt:{timestampValue:new Date().toISOString()}}};
+  };
+  let syncs=0;ctx.syncDrive=()=>{syncs++;return {status:'updated',snapshotId:'new'}};ctx.token_=()=> 'owner';ctx.commit_=(root,token,writes)=>results.push(writes);
+  ctx.doPost({parameter:{idToken:'header.payload.signature',requestId}});
+  assert.equal(calls[0].token,'Bearer header.payload.signature');assert.equal(syncs,role==='editor'?1:0);
+  if(role==='viewer')assert.equal(results.length,0);
+  else {assert.equal(results[0][0].update.fields.status.stringValue,'updated');assert.equal(results[0][0].currentDocument.updateTime,'version');assert.ok(!JSON.stringify(results).includes('signature'));}
+ }
+});
+test('Drive endpoint accepts only HTTPS Apps Script deployed URLs',()=>{
+ const source=fs.readFileSync(require.resolve('../public/app.js'),'utf8');const ctx={};vm.createContext(ctx);vm.runInContext(source.slice(source.indexOf('function validDriveUrl'),source.indexOf('async function checkDrive')),ctx);
+ assert.equal(ctx.validDriveUrl('https://script.google.com/macros/s/AKfy123_abc/exec'),true);
+ for(const value of ['https://evil.com/exec','https://script.google.com.evil.com/macros/s/abc/exec','https://script.google.com/macros/s/abc/dev','http://script.google.com/macros/s/abc/exec'])assert.equal(ctx.validDriveUrl(value),false);
+});

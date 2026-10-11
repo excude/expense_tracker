@@ -2,6 +2,7 @@
 const $=id=>document.getElementById(id), cfg=window.APP_CONFIG;
 const state={data:{records:[],cards:[]},page:0,busy:false,initialized:false,settingsReady:false,excluded:[],nicknames:{},targets:{},role:null};
 const won=v=>Number(v).toLocaleString('ko-KR')+'원';
+let driveCancel;
 let categoryStop;
 let merchantStop;
 let merchantRules=new Map();
@@ -15,7 +16,7 @@ function notify(message,error=false){$('notice').textContent=message;$('notice')
 function options(el,items,all){const signature=JSON.stringify([all,items]);if(el.dataset.optionsSignature===signature)return;el.dataset.optionsSignature=signature;const selected=el.value;el.replaceChildren(new Option(all,''),...items.map(x=>new Option(x.label,x.value)));el.value=items.some(x=>String(x.value)===selected)?selected:'';}
 function show(data){state.data=data;const selected=$('month').value;const months=[...new Set(data.records.map(r=>r.date.slice(0,7)))].sort().reverse();$('month').replaceChildren(...months.map(m=>new Option(m,m)));$('month').value=months.includes(selected)?selected:(data.latestMonth||months[0]||'');state.initialized=true;render();}
 async function run(fn){if(state.busy)return;state.busy=true;notify('');try{await fn();}catch(e){notify(e.code?.startsWith('auth/')?'로그인 정보를 확인해 주세요.':e.message,true);}finally{state.busy=false;render();}}
-function parse(bytes){return new Promise((resolve,reject)=>{const worker=new Worker('./parse-worker.js?v=0.14');const timer=setTimeout(()=>{worker.terminate();reject(Error('백업 분석 시간이 초과되었습니다.'));},60000);worker.onmessage=({data})=>{clearTimeout(timer);worker.terminate();data.error?reject(Error(data.error)):resolve(data);};worker.onerror=()=>{clearTimeout(timer);worker.terminate();reject(Error('백업 분석에 실패했습니다.'));};worker.postMessage(bytes,[bytes]);});}
+function parse(bytes){return new Promise((resolve,reject)=>{const worker=new Worker('./parse-worker.js?v=0.15');const timer=setTimeout(()=>{worker.terminate();reject(Error('백업 분석 시간이 초과되었습니다.'));},60000);worker.onmessage=({data})=>{clearTimeout(timer);worker.terminate();data.error?reject(Error(data.error)):resolve(data);};worker.onerror=()=>{clearTimeout(timer);worker.terminate();reject(Error('백업 분석에 실패했습니다.'));};worker.postMessage(bytes,[bytes]);});}
 async function loadSnapshot(meta,epoch){
  if(!meta){show({records:[],cards:[]});return;}
  const ref=db.doc('users/'+cfg.ledgerId+'/snapshots/'+meta.snapshotId);
@@ -114,6 +115,48 @@ function openPicker(id){const select=$(id),dialog=$('quick-picker');$('picker-ti
 $('category-picker').onclick=()=>openPicker('category');
 $('month-picker').onclick=()=>openPicker('month');$('card-picker').onclick=()=>openPicker('card');$('picker-close').onclick=()=>$('quick-picker').close();
 $('quick-picker').addEventListener('click',e=>{if(e.target!==e.currentTarget)return;const r=e.currentTarget.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)e.currentTarget.close();});
+
+function validDriveUrl(url){return /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(url);}
+async function checkDrive(endpoint){
+ if(state.role!=='editor'||!auth.currentUser)throw Error('관리자 권한이 필요합니다.');
+ if(!validDriveUrl(endpoint))throw Error('Apps Script 웹앱의 /exec 주소를 입력하세요.');
+ const user=auth.currentUser,idToken=await user.getIdToken(),requestId=crypto.randomUUID();
+ const ref=db.doc('users/'+cfg.ledgerId+'/meta/driveCheck');
+ await ref.set({requestId,requestedBy:user.uid,status:'queued',createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+ if(auth.currentUser?.uid!==user.uid||state.role!=='editor')throw Error('로그인 상태가 변경되었습니다.');
+ $('drive-check').disabled=true;$('drive-check').textContent='드라이브 확인 중…';notify('드라이브 최신 백업을 확인하고 있습니다…');
+ try{
+  await new Promise((resolve,reject)=>{
+   let unsubscribe,finished=false;
+   const finish=(error)=>{if(finished)return;finished=true;clearTimeout(timer);unsubscribe?.();driveCancel=null;error?reject(error):resolve();};
+   const timer=setTimeout(()=>finish(Error('응답 시간이 초과되었습니다. Apps Script 웹앱 배포와 주소를 확인하세요.')),120000);
+   driveCancel=()=>finish(Error('로그인 상태가 변경되었습니다.'));
+   unsubscribe=ref.onSnapshot(snapshot=>{
+    const result=snapshot.data();if(!result)return;
+    if(result.requestId!==requestId){finish(Error('다른 관리자가 새 확인을 요청했습니다. 잠시 후 다시 눌러 주세요.'));return;}
+    if(['updated','unchanged'].includes(result.status)){notify(result.message);finish();}
+    else if(['error','busy'].includes(result.status))finish(Error(result.message));
+   },error=>finish(error));
+   fetch(endpoint,{method:'POST',mode:'no-cors',credentials:'omit',body:new URLSearchParams({idToken,requestId})}).catch(()=>finish(Error('드라이브 체크 요청을 보내지 못했습니다. 연결과 웹앱 주소를 확인하세요.')));
+  });
+ }finally{$('drive-check').disabled=false;$('drive-check').textContent='드라이브 체크';}
+}
+$('drive-check').onclick=()=>run(async()=>{
+ if(state.role!=='editor')throw Error('관리자 권한이 필요합니다.');
+ const integration=await db.doc('users/'+cfg.ledgerId+'/meta/driveIntegration').get();
+ const endpoint=integration.data()?.webAppUrl||'';
+ if(!validDriveUrl(endpoint)){$('drive-url').value=endpoint;$('drive-config').showModal();return;}
+ await checkDrive(endpoint);
+});
+$('drive-check').oncontextmenu=e=>{e.preventDefault();if(state.role!=='editor'||state.busy)return;$('drive-config').showModal();};
+$('drive-settings').onclick=()=>run(async()=>{if(state.role!=='editor')throw Error('관리자 권한이 필요합니다.');const settings=await db.doc('users/'+cfg.ledgerId+'/meta/driveIntegration').get();$('drive-url').value=settings.data()?.webAppUrl||'';$('card-admin').close();$('drive-config').showModal();});
+$('drive-config-close').onclick=()=>$('drive-config').close();
+$('drive-config-form').onsubmit=e=>{e.preventDefault();run(async()=>{
+ if(state.role!=='editor')throw Error('관리자 권한이 필요합니다.');
+ const endpoint=$('drive-url').value.trim();if(!validDriveUrl(endpoint))throw Error('Apps Script 웹앱의 /exec 주소를 입력하세요.');
+ await db.doc('users/'+cfg.ledgerId+'/meta/driveIntegration').set({webAppUrl:endpoint});$('drive-config').close();await checkDrive(endpoint);
+});};
+
 $('google-login').onclick=()=>run(async()=>{const provider=new firebase.auth.GoogleAuthProvider();provider.setCustomParameters({prompt:'select_account'});await auth.signInWithPopup(provider);});
 $('logout').onclick=()=>run(()=>auth.signOut());
 $('backup-file').onchange=e=>{const f=e.target.files[0];if(f)run(()=>upload(f));e.target.value='';};
@@ -122,7 +165,7 @@ $('prev').onclick=()=>{state.page--;render();};$('next').onclick=()=>{state.page
 (async()=>{try{
  if(cfg.firebase.projectId.startsWith('REPLACE_'))throw Error('설정이 필요합니다. README의 Firebase 설정을 먼저 완료해 주세요.');
  firebase.initializeApp(cfg.firebase);auth=firebase.auth();db=firebase.firestore();await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
- function clearView(){merchantStop?.();merchantStop=null;merchantRules=new Map();merchantsReady=false;categoryStop?.();categoryStop=null;categoryOverrides={};categoryRevisions={};categoriesReady=false;editingRecord=null;$('category-edit').close();settingsStop?.();settingsStop=null;state.settingsReady=false;state.excluded=[];state.nicknames={};state.targets={};state.role=null;$('admin-button').hidden=true;$('card-admin').close();$('quick-picker').close();$('monthly-stats').close();stop?.();stop=null;++generation;state.initialized=false;state.data={records:[],cards:[]};render();$('dashboard').hidden=true;$('login').hidden=false;}
+ function clearView(){driveCancel?.();$('drive-check').hidden=true;$('drive-config').close();merchantStop?.();merchantStop=null;merchantRules=new Map();merchantsReady=false;categoryStop?.();categoryStop=null;categoryOverrides={};categoryRevisions={};categoriesReady=false;editingRecord=null;$('category-edit').close();settingsStop?.();settingsStop=null;state.settingsReady=false;state.excluded=[];state.nicknames={};state.targets={};state.role=null;$('admin-button').hidden=true;$('card-admin').close();$('quick-picker').close();$('monthly-stats').close();stop?.();stop=null;++generation;state.initialized=false;state.data={records:[],cards:[]};render();$('dashboard').hidden=true;$('login').hidden=false;}
  auth.onAuthStateChanged(user=>{
   accessStop?.();accessStop=null;clearView();$('logout').hidden=!user;
   if(!user)return;
@@ -137,7 +180,7 @@ $('prev').onclick=()=>{state.page--;render();};$('next').onclick=()=>{state.page
    merchantStop=db.collection('users/'+cfg.ledgerId+'/merchantCategories').onSnapshot(snapshot=>{if(auth.currentUser?.uid!==identity)return;merchantRules=new Map();snapshot.forEach(doc=>{const value=doc.data();if(typeof value.merchant==='string'&&value.merchant&&CONSUMPTION_CATEGORIES.includes(value.category))merchantRules.set(value.merchant,{category:value.category,revision:value.revision||'legacy'});});merchantsReady=true;render();},()=>{merchantsReady=false;render();notify('가맹점 자동 분류 설정을 불러오지 못했습니다. 새로고침해 주세요.',true);});
    categoryStop=db.collection('users/'+cfg.ledgerId+'/transactionCategories').onSnapshot(snapshot=>{if(auth.currentUser?.uid!==identity)return;categoryOverrides={};categoryRevisions={};snapshot.forEach(doc=>{const data=doc.data(),value=data.category;if(CONSUMPTION_CATEGORIES.includes(value)){categoryOverrides[doc.id]=value;categoryRevisions[doc.id]=data.ruleRevision||null;}});categoriesReady=true;render();},()=>{categoriesReady=false;render();notify('소비 분류 설정을 불러오지 못했습니다. 새로고침해 주세요.',true);});
 
-   $('backup-file').closest('label').hidden=permission.role!=='editor';
+   $('backup-file').closest('label').hidden=permission.role!=='editor';$('drive-check').hidden=permission.role!=='editor';
    settingsStop=db.doc('users/'+cfg.ledgerId+'/meta/cardSettings').onSnapshot(snapshot=>{if(auth.currentUser?.uid!==identity)return;const settings=snapshot.data()||{};state.excluded=Array.isArray(settings.excludedCardIds)?settings.excludedCardIds.map(String):[];state.nicknames=settings.nicknames||{};state.targets=settings.targets||{};state.settingsReady=true;state.page=0;$('admin-button').hidden=state.role!=='editor';render();},()=>{state.settingsReady=false;$('admin-button').hidden=true;$('card-admin').close();render();notify('공통 카드 설정을 불러오지 못했습니다. 새로고침해 주세요.',true);});
    stop=db.doc('users/'+cfg.ledgerId+'/meta/current').onSnapshot(s=>{const ticket=++generation;loadSnapshot(s.data(),ticket).catch(e=>{if(ticket===generation)notify(e.message,true);});},()=>{clearView();notify('접근 권한이 없거나 연결이 해제되었습니다.',true);});
   },()=>{clearView();notify('접근이 허용되지 않았습니다. 관리자에게 확인해 주세요.',true);});
