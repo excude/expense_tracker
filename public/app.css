@@ -16,3 +16,5 @@
 .filters{flex-wrap:wrap}.category-summary{padding:16px;margin-bottom:20px;display:flex;gap:8px;flex-wrap:wrap}.category-summary>p{width:100%;margin:0 0 8px;font-size:13px}.category-badge{display:inline-block!important;margin-top:8px!important;padding:3px 8px;min-height:0;border-radius:12px;background:#eef1f6;color:#526079!important;font-size:12px!important;font-weight:500}#category-edit-options{display:grid;gap:6px;max-height:60vh;overflow:auto}
 
 .category-scope{display:flex;align-items:center;gap:8px;margin:16px 0}.category-scope input{width:auto}
+
+@media(max-width:650px){.tools{flex-wrap:nowrap;gap:6px;width:100%;overflow-x:auto}.tools>button,.tools>.upload{white-space:nowrap;flex:0 0 auto;font-size:clamp(11px,3vw,13px);padding:10px 8px;min-height:42px}.tools>.upload{gap:0}}
